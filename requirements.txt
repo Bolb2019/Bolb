@@ -1,0 +1,9 @@
+slack-bolt>=1.18.0
+slack-sdk>=3.23.0
+torch>=2.0.0
+transformers>=4.30.0
+peft>=0.4.0
+bitsandbytes>=0.41.0
+datasets>=2.10.0
+accelerate>=0.20.0
+python-dotenv>=0.21.0
