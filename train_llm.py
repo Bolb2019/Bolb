@@ -141,7 +141,11 @@ def train_llm(
     print(f"Saving model to: {output_dir}")
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-    
+
+    # Also save the base model's config.json so loaders can reconstruct
+    # the architecture (PEFT only saves adapter files, not the base config)
+    model.base_model.model.config.save_pretrained(output_dir)
+
     print("Training complete!")
 
 

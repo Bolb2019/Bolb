@@ -7,6 +7,7 @@ import os
 import torch
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
@@ -34,12 +35,13 @@ def load_model(model_dir: str = "models/bolb-llm"):
             tokenizer = AutoTokenizer.from_pretrained(model_dir)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                model_dir,
-                torch_dtype=torch.float16,
+
+            base_model = AutoModelForCausalLM.from_pretrained(
+                "gpt2",
+                dtype=torch.float16,
                 device_map="auto",
             )
+            model = PeftModel.from_pretrained(base_model, model_dir)
             model.eval()
             print("Model loaded successfully")
         except Exception as e:
@@ -47,35 +49,31 @@ def load_model(model_dir: str = "models/bolb-llm"):
             raise
 
 
-def generate_response(prompt: str, max_length: int = 150) -> str:
+def generate_response(prompt: str, max_new_tokens: int = 150) -> str:
     """
     Generate a response using the fine-tuned LLM.
-    
+
     Args:
         prompt: The input prompt
-        max_length: Maximum length of generated text
-        
+        max_new_tokens: Maximum number of new tokens to generate
+
     Returns:
         Generated text
     """
     if model is None or tokenizer is None:
         return "Model not loaded. Please train the model first."
-    
+
     try:
-        # Tokenize input
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        
-        # Generate
+
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_length=max_length,
-                num_beams=2,
+                max_new_tokens=max_new_tokens,
                 top_p=0.92,
                 top_k=50,
                 temperature=0.7,
                 do_sample=True,
-                early_stopping=True,
                 pad_token_id=tokenizer.eos_token_id,
             )
         
@@ -93,25 +91,60 @@ def generate_response(prompt: str, max_length: int = 150) -> str:
         return f"Error: {str(e)}"
 
 
+import re
+
+def extract_user_text(message_text: str) -> str:
+    """Strip the @bolb mention (format: <@UXXXXXXXX>) from the message"""
+    # Slack encodes mentions as <@USERID>, remove all of them
+    return re.sub(r"<@[A-Z0-9]+>", "", message_text).strip()
+
+
+def handle_mention(message_text: str, thread_ts: str, say, logger):
+    """Shared logic for responding to any @bolb mention"""
+    logger.info(f"Mention received: {message_text}")
+
+    if model is None:
+        load_model()
+
+    user_text = extract_user_text(message_text)
+
+    if not user_text:
+        say("Hey! Mention me with a message and I'll respond.", thread_ts=thread_ts)
+        return
+
+    response = generate_response(user_text)
+
+    if not response:
+        say("I'm not sure what to say to that!", thread_ts=thread_ts)
+        return
+
+    say(response, thread_ts=thread_ts)
+
+
 @app.event("app_mention")
 def handle_app_mention(body, say, logger):
-    """Handle direct mentions of the bot"""
+    """Handle @bolb mentions in channels"""
     try:
-        message_text = body["event"]["text"]
-        logger.info(f"App mention: {message_text}")
-        
-        if model is None:
-            load_model()
-        
-        # Remove the bot mention from the text
-        user_text = message_text.split(">", 1)[1].strip() if ">" in message_text else message_text
-        
-        response = generate_response(user_text)
-        say(response)
-    
+        event = body["event"]
+        # Use existing thread if the mention is already in one, otherwise start a new thread
+        thread_ts = event.get("thread_ts") or event["ts"]
+        handle_mention(event["text"], thread_ts, say, logger)
     except Exception as e:
         logger.error(f"Error handling app mention: {e}")
         say(f"Sorry, I encountered an error: {str(e)}")
+
+
+@app.event("message")
+def handle_direct_message(body, say, logger):
+    """Handle @bolb mentions in DMs"""
+    try:
+        event = body["event"]
+        # Only respond to DMs (channel_type: im), ignore bot messages
+        if event.get("channel_type") == "im" and not event.get("bot_id"):
+            thread_ts = event.get("thread_ts") or event["ts"]
+            handle_mention(event.get("text", ""), thread_ts, say, logger)
+    except Exception as e:
+        logger.error(f"Error handling DM: {e}")
 
 
 def main():
