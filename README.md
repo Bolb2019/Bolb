@@ -6,26 +6,27 @@ Your personal LLM-powered Slack bot that learns from your text and responds inte
 
 ```bash
 # 1. Install dependencies
-pip install -r requirements.txt
+py -3.12 -m pip install -r requirements.txt
 
 # 2. Prepare your training data
 # Edit training_data.txt with content for the bot to learn from
 
 # 3. Train the model
-python train_llm.py training_data.txt
+py -3.12 train_llm.py training_data.txt
 
 # 4. Configure Slack credentials
 # Copy .env.example to .env and add your Slack tokens
 
 # 5. Run the bot
-python slack_bot.py
+py -3.12 slack_bot.py
 ```
 
 ## Features
 
-✨ **Fine-tuned LLM** - Trained on your custom text data
-🚀 **Efficient** - Uses LoRA and 4-bit quantization to run on consumer hardware
+✨ **Fine-tuned LLM** - Trained on your custom text data using microsoft/phi-2
+🚀 **Efficient** - Uses LoRA fine-tuning to run on consumer hardware
 💬 **Slack Integration** - Responds to #bolb mentions in real-time
+🎮 **GPU Accelerated** - Runs on NVIDIA GPUs with CUDA for fast responses
 💰 **Free** - Uses open-source models, no API costs
 
 ## Files Overview
@@ -40,8 +41,9 @@ python slack_bot.py
 ## Setup Guide
 
 See [SETUP.md](SETUP.md) for detailed instructions including:
+- Python 3.12 installation
+- CUDA/GPU setup
 - Slack app configuration
-- Environment setup  
 - Model training
 - Troubleshooting
 
@@ -49,24 +51,24 @@ See [SETUP.md](SETUP.md) for detailed instructions including:
 
 ```bash
 # Test the model locally before deploying
-python chat.py
+py -3.12 chat.py
 
 # Run diagnostics to verify setup
-python diagnostics.py
+py -3.12 diagnostics.py
 ```
 
 ## How It Works
 
-1. **Training Phase**: The script fine-tunes a base LLM (GPT-2) on your text data using LoRA adapters
+1. **Training Phase**: The script fine-tunes microsoft/phi-2 (2.7B parameters) on your text data using LoRA adapters
 2. **Inference Phase**: The Slack bot loads the trained model and generates responses when mentioned
-3. **Efficiency**: Uses 4-bit quantization to fit large models on consumer GPUs
+3. **Efficiency**: Runs on your NVIDIA GPU via CUDA for fast inference
 
 ## Requirements
 
-- Python 3.10+
-- 8GB+ RAM (12GB recommended)
-- GPU preferred (NVIDIA with CUDA)
-- CPU-only is supported but much slower
+- Python 3.12 (3.14 is not supported by PyTorch)
+- NVIDIA GPU with CUDA (CPU-only is very slow for phi-2)
+- 8GB+ VRAM (RTX 3060 or better recommended)
+- 16GB+ RAM
 
 ## License
 
@@ -75,4 +77,3 @@ MIT
 ---
 
 For more details, see [SETUP.md](SETUP.md)
-an LLM trained off of myself

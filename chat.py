@@ -9,26 +9,41 @@ from peft import PeftModel
 from pathlib import Path
 import sys
 
+DEFAULT_BASE_MODEL = "microsoft/phi-2"
+
+
+def get_base_model_name(model_dir: str) -> str:
+    """Read the base model name saved during training, with a sensible fallback."""
+    base_model_file = Path(model_dir) / "base_model.txt"
+    if base_model_file.exists():
+        return base_model_file.read_text().strip()
+    print(f"Warning: base_model.txt not found in {model_dir}, falling back to {DEFAULT_BASE_MODEL}")
+    return DEFAULT_BASE_MODEL
+
 
 def load_model(model_dir: str = "models/bolb-llm"):
-    """Load the LoRA adapter on top of the base GPT-2 model"""
+    """Load the LoRA adapter on top of the base model"""
     try:
         print(f"Loading model from: {model_dir}")
-        
+
+        base_model_name = get_base_model_name(model_dir)
+        print(f"Base model: {base_model_name}")
+
         # Load tokenizer from the adapter directory
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Load the base GPT-2 model first, then apply the LoRA adapter on top
+        # Load the base model, then apply the LoRA adapter on top
         base_model = AutoModelForCausalLM.from_pretrained(
-            "gpt2",
-            dtype=torch.float16,
+            base_model_name,
+            torch_dtype=torch.float16,
             device_map="auto",
+            trust_remote_code=True,
         )
         model = PeftModel.from_pretrained(base_model, model_dir)
         model.eval()
-        
+
         print("✓ Model loaded successfully\n")
         return model, tokenizer
 
@@ -40,25 +55,30 @@ def load_model(model_dir: str = "models/bolb-llm"):
 def generate_response(
     model,
     tokenizer,
-    prompt: str,
-    max_length: int = 150,
+    user_input: str,
+    max_new_tokens: int = 120,
     temperature: float = 0.7,
     top_p: float = 0.92,
 ):
     """Generate a response from the model"""
     try:
+        # Format prompt so the model knows to only write Bolb's reply
+        prompt = f"User: {user_input}\nBolb:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_length=max_length,
-                num_beams=2,
+                max_new_tokens=max_new_tokens,
                 top_p=top_p,
+                top_k=50,
                 temperature=temperature,
                 do_sample=True,
-                early_stopping=True,
                 pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=[
+                    tokenizer.eos_token_id,
+                    tokenizer.encode("\n")[0],  # Stop at newline so it can't start "Person A:" etc
+                ],
             )
 
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -104,7 +124,7 @@ def main():
                 break
 
             print("\nBolb: ", end="", flush=True)
-            response = generate_response(model, tokenizer, user_input)
+            response = generate_response(model, tokenizer, user_input=user_input)
             print(response)
             print()
 

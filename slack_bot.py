@@ -4,6 +4,7 @@ Responds when messages contain #bolb mention in #bolbs-hideout channel.
 """
 
 import os
+import re
 import torch
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -23,23 +24,38 @@ app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 model = None
 tokenizer = None
 
+DEFAULT_BASE_MODEL = "microsoft/phi-2"
+
+
+def get_base_model_name(model_dir: str) -> str:
+    """Read the base model name saved during training, with a sensible fallback."""
+    base_model_file = Path(model_dir) / "base_model.txt"
+    if base_model_file.exists():
+        return base_model_file.read_text().strip()
+    print(f"Warning: base_model.txt not found in {model_dir}, falling back to {DEFAULT_BASE_MODEL}")
+    return DEFAULT_BASE_MODEL
+
 
 def load_model(model_dir: str = "models/bolb-llm"):
     """Load the fine-tuned model and tokenizer"""
     global model, tokenizer
-    
+
     if model is None or tokenizer is None:
         print(f"Loading model from: {model_dir}")
-        
+
+        base_model_name = get_base_model_name(model_dir)
+        print(f"Base model: {base_model_name}")
+
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_dir)
+            tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
             base_model = AutoModelForCausalLM.from_pretrained(
-                "gpt2",
-                dtype=torch.float16,
+                base_model_name,
+                torch_dtype=torch.float16,
                 device_map="auto",
+                trust_remote_code=True,
             )
             model = PeftModel.from_pretrained(base_model, model_dir)
             model.eval()
@@ -49,12 +65,12 @@ def load_model(model_dir: str = "models/bolb-llm"):
             raise
 
 
-def generate_response(prompt: str, max_new_tokens: int = 150) -> str:
+def generate_response(user_input: str, max_new_tokens: int = 60) -> str:
     """
     Generate a response using the fine-tuned LLM.
 
     Args:
-        prompt: The input prompt
+        user_input: The user's message
         max_new_tokens: Maximum number of new tokens to generate
 
     Returns:
@@ -64,6 +80,8 @@ def generate_response(prompt: str, max_new_tokens: int = 150) -> str:
         return "Model not loaded. Please train the model first."
 
     try:
+        # Format prompt so the model knows to only write Bolb's reply
+        prompt = f"User: {user_input}\nBolb:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -75,27 +93,28 @@ def generate_response(prompt: str, max_new_tokens: int = 150) -> str:
                 temperature=0.7,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=[
+                    tokenizer.eos_token_id,
+                    tokenizer.encode("\n")[0],  # Stop at newline so it can't start "Person A:" etc
+                ],
             )
-        
-        # Decode and return
+
+        # Decode and return only the newly generated tokens
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
+
         # Remove the prompt from the output (we only want the generated part)
         if generated_text.startswith(prompt):
             generated_text = generated_text[len(prompt):].strip()
-        
+
         return generated_text
-    
+
     except Exception as e:
         print(f"Error generating response: {e}")
         return f"Error: {str(e)}"
 
 
-import re
-
 def extract_user_text(message_text: str) -> str:
     """Strip the @bolb mention (format: <@UXXXXXXXX>) from the message"""
-    # Slack encodes mentions as <@USERID>, remove all of them
     return re.sub(r"<@[A-Z0-9]+>", "", message_text).strip()
 
 
@@ -112,7 +131,7 @@ def handle_mention(message_text: str, thread_ts: str, say, logger):
         say("Hey! Mention me with a message and I'll respond.", thread_ts=thread_ts)
         return
 
-    response = generate_response(user_text)
+    response = generate_response(user_input=user_text)
 
     if not response:
         say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -155,13 +174,13 @@ def main():
     except Exception as e:
         print(f"Warning: Could not pre-load model: {e}")
         print("Model will be loaded on first use")
-    
+
     # Start the bot using Socket Mode
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
         print("Error: SLACK_APP_TOKEN not set in environment")
         return
-    
+
     print("Starting Slack bot...")
     handler = SocketModeHandler(app, app_token)
     handler.start()
