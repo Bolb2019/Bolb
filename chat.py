@@ -52,18 +52,20 @@ def load_model(model_dir: str = "models/bolb-llm"):
         sys.exit(1)
 
 
+SYSTEM_PROMPT = "Bolb is a casual, witty person who gives short, natural responses.\n"
+
+
 def generate_response(
     model,
     tokenizer,
-    user_input: str,
-    max_new_tokens: int = 120,
-    temperature: float = 0.7,
+    context: str,
+    max_new_tokens: int = 60,
+    temperature: float = 0.5,
     top_p: float = 0.92,
 ):
-    """Generate a response from the model"""
+    """Generate a response from the model using full conversation context"""
     try:
-        # Format prompt so the model knows to only write Bolb's reply
-        prompt = f"User: {user_input}\nBolb:"
+        prompt = f"{SYSTEM_PROMPT}{context}\nBolb:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -71,23 +73,21 @@ def generate_response(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 top_p=top_p,
-                top_k=50,
+                top_k=30,
                 temperature=temperature,
                 do_sample=True,
+                repetition_penalty=1.1,
+                no_repeat_ngram_size=3,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=[
                     tokenizer.eos_token_id,
-                    tokenizer.encode("\n")[0],  # Stop at newline so it can't start "Person A:" etc
+                    tokenizer.encode("\n\n")[0],
                 ],
             )
 
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-        # Remove prompt from output
-        if generated_text.startswith(prompt):
-            generated_text = generated_text[len(prompt):].strip()
-
-        return generated_text
+        # Only decode the newly generated tokens, not the prompt/context
+        input_length = inputs["input_ids"].shape[1]
+        return tokenizer.decode(outputs[0][input_length:], skip_special_tokens=True).strip()
 
     except Exception as e:
         return f"Error generating response: {str(e)}"
@@ -110,7 +110,11 @@ def main():
     print("Bolb Interactive Chat")
     print("=" * 60)
     print("Chat with your trained model locally!")
-    print("Type 'quit' or 'exit' to stop.\n")
+    print("Type 'quit' or 'exit' to stop.")
+    print("Messages starting with ## are ignored.\n")
+
+    # Keep conversation history for context
+    history = []
 
     while True:
         try:
@@ -123,10 +127,22 @@ def main():
                 print("\nGoodbye!")
                 break
 
+            # Ignore messages starting with ##
+            if user_input.startswith("##"):
+                print("(ignored)\n")
+                continue
+
+            # Build context from history
+            history.append(f"User: {user_input}")
+            context = "\n".join(history)
+
             print("\nBolb: ", end="", flush=True)
-            response = generate_response(model, tokenizer, user_input=user_input)
+            response = generate_response(model, tokenizer, context=context)
             print(response)
             print()
+
+            # Add Bolb's response to history for next turn
+            history.append(f"Bolb: {response}")
 
         except KeyboardInterrupt:
             print("\n\nInterrupted. Goodbye!")

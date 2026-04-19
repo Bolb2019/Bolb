@@ -1,6 +1,8 @@
 """
 Slack bot that uses a fine-tuned LLM to respond to messages.
-Responds when messages contain #bolb mention in #bolbs-hideout channel.
+- Responds when @mentioned in any channel or DM
+- Once active in a thread, responds to ALL subsequent messages in that thread
+- Uses the full thread history as context for each response
 """
 
 import os
@@ -25,6 +27,9 @@ model = None
 tokenizer = None
 
 DEFAULT_BASE_MODEL = "microsoft/phi-2"
+
+# Track which threads Bolb has been active in: set of (channel, thread_ts)
+active_threads: set = set()
 
 
 def get_base_model_name(model_dir: str) -> str:
@@ -65,12 +70,42 @@ def load_model(model_dir: str = "models/bolb-llm"):
             raise
 
 
-def generate_response(user_input: str, max_new_tokens: int = 60) -> str:
+def fetch_thread_context(client, channel: str, thread_ts: str) -> str:
+    """
+    Fetch all messages in a thread and format them as conversation context.
+    Returns a formatted string like:
+        User: hey bolb
+        Bolb: hey!
+        User: how are you?
+    """
+    try:
+        result = client.conversations_replies(channel=channel, ts=thread_ts)
+        messages = result.get("messages", [])
+
+        context_lines = []
+        for msg in messages:
+            text = extract_user_text(msg.get("text", "")).strip()
+            if not text:
+                continue
+            # Bot messages have bot_id set; everything else is a user
+            if msg.get("bot_id"):
+                context_lines.append(f"Bolb: {text}")
+            else:
+                context_lines.append(f"User: {text}")
+
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        print(f"Error fetching thread context: {e}")
+        return ""
+
+
+def generate_response(context: str, max_new_tokens: int = 60) -> str:
     """
     Generate a response using the fine-tuned LLM.
 
     Args:
-        user_input: The user's message
+        context: Full conversation history formatted as "User: ...\\nBolb: ..." etc.
         max_new_tokens: Maximum number of new tokens to generate
 
     Returns:
@@ -80,8 +115,8 @@ def generate_response(user_input: str, max_new_tokens: int = 60) -> str:
         return "Model not loaded. Please train the model first."
 
     try:
-        # Format prompt so the model knows to only write Bolb's reply
-        prompt = f"User: {user_input}\nBolb:"
+        # Append "Bolb:" at the end so the model knows it's its turn to speak
+        prompt = f"{context}\nBolb:"
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -89,22 +124,20 @@ def generate_response(user_input: str, max_new_tokens: int = 60) -> str:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 top_p=0.92,
-                top_k=50,
-                temperature=0.7,
+                top_k=40,
+                temperature=0.5,
                 do_sample=True,
+                repetition_penalty=1.05,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=[
                     tokenizer.eos_token_id,
-                    tokenizer.encode("\n")[0],  # Stop at newline so it can't start "Person A:" etc
+                    tokenizer.encode("\n")[0],  # Stop at newline so it can't write multiple turns
                 ],
             )
 
-        # Decode and return only the newly generated tokens
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-        # Remove the prompt from the output (we only want the generated part)
-        if generated_text.startswith(prompt):
-            generated_text = generated_text[len(prompt):].strip()
+        # Only decode the newly generated tokens, not the prompt/context
+        input_length = inputs["input_ids"].shape[1]
+        generated_text = tokenizer.decode(outputs[0][input_length:], skip_special_tokens=True).strip()
 
         return generated_text
 
@@ -114,24 +147,21 @@ def generate_response(user_input: str, max_new_tokens: int = 60) -> str:
 
 
 def extract_user_text(message_text: str) -> str:
-    """Strip the @bolb mention (format: <@UXXXXXXXX>) from the message"""
+    """Strip Slack user mention tags (format: <@UXXXXXXXX>) from the message"""
     return re.sub(r"<@[A-Z0-9]+>", "", message_text).strip()
 
 
-def handle_mention(message_text: str, thread_ts: str, say, logger):
-    """Shared logic for responding to any @bolb mention"""
-    logger.info(f"Mention received: {message_text}")
-
+def handle_response(client, channel: str, thread_ts: str, say, logger):
+    """Fetch thread context and respond"""
     if model is None:
         load_model()
 
-    user_text = extract_user_text(message_text)
+    context = fetch_thread_context(client, channel, thread_ts)
 
-    if not user_text:
-        say("Hey! Mention me with a message and I'll respond.", thread_ts=thread_ts)
+    if not context:
         return
 
-    response = generate_response(user_input=user_text)
+    response = generate_response(context)
 
     if not response:
         say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -141,29 +171,64 @@ def handle_mention(message_text: str, thread_ts: str, say, logger):
 
 
 @app.event("app_mention")
-def handle_app_mention(body, say, logger):
-    """Handle @bolb mentions in channels"""
+def handle_app_mention(body, client, say, logger):
+    """Handle @bolb mentions — mark the thread as active and respond"""
     try:
         event = body["event"]
-        # Use existing thread if the mention is already in one, otherwise start a new thread
+
+        # Ignore messages starting with ##
+        if extract_user_text(event.get("text", "")).startswith("##"):
+            logger.info("Message starts with ##, ignoring.")
+            return
+
+        channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
-        handle_mention(event["text"], thread_ts, say, logger)
+
+        # Mark this thread as one Bolb is active in
+        active_threads.add((channel, thread_ts))
+        logger.info(f"Now active in thread {thread_ts} in {channel}")
+
+        handle_response(client, channel, thread_ts, say, logger)
+
     except Exception as e:
         logger.error(f"Error handling app mention: {e}")
         say(f"Sorry, I encountered an error: {str(e)}")
 
 
 @app.event("message")
-def handle_direct_message(body, say, logger):
-    """Handle @bolb mentions in DMs"""
+def handle_message(body, client, say, logger):
+    """
+    Handle all messages:
+    - In DMs: always respond
+    - In channels: respond if this is a thread Bolb is already active in,
+                   and the message isn't from the bot itself
+    """
     try:
         event = body["event"]
-        # Only respond to DMs (channel_type: im), ignore bot messages
-        if event.get("channel_type") == "im" and not event.get("bot_id"):
-            thread_ts = event.get("thread_ts") or event["ts"]
-            handle_mention(event.get("text", ""), thread_ts, say, logger)
+
+        # Ignore bot messages to avoid infinite loops
+        if event.get("bot_id") or event.get("subtype") == "bot_message":
+            return
+
+        # Ignore messages starting with ##
+        if extract_user_text(event.get("text", "")).startswith("##"):
+            logger.info("Message starts with ##, ignoring.")
+            return
+
+        channel = event["channel"]
+        channel_type = event.get("channel_type")
+        thread_ts = event.get("thread_ts") or event["ts"]
+
+        if channel_type == "im":
+            # Always respond in DMs
+            handle_response(client, channel, thread_ts, say, logger)
+
+        elif (channel, thread_ts) in active_threads:
+            # Respond to any new message in a thread where Bolb was mentioned
+            handle_response(client, channel, thread_ts, say, logger)
+
     except Exception as e:
-        logger.error(f"Error handling DM: {e}")
+        logger.error(f"Error handling message: {e}")
 
 
 def main():
