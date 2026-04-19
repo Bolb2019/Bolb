@@ -73,10 +73,10 @@ def generate_response(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 top_p=top_p,
-                top_k=30,
+                top_k=40,
                 temperature=temperature,
                 do_sample=True,
-                repetition_penalty=1.1,
+                repetition_penalty=1.05,
                 no_repeat_ngram_size=3,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=[
