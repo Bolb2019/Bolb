@@ -31,6 +31,9 @@ DEFAULT_BASE_MODEL = "microsoft/phi-2"
 # Track which threads Bolb has been active in: set of (channel, thread_ts)
 active_threads: set = set()
 
+# How many messages back to use as context (change this to whatever you want)
+CONTEXT_MESSAGES = 1
+
 
 def get_base_model_name(model_dir: str) -> str:
     """Read the base model name saved during training, with a sensible fallback."""
@@ -72,7 +75,8 @@ def load_model(model_dir: str = "models/bolb-llm"):
 
 def fetch_thread_context(client, channel: str, thread_ts: str) -> str:
     """
-    Fetch all messages in a thread and format them as conversation context.
+    Fetch the last CONTEXT_MESSAGES messages in a thread and format them
+    as conversation context. ## messages are excluded from the count.
     Returns a formatted string like:
         User: hey bolb
         Bolb: hey!
@@ -85,13 +89,19 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> str:
         context_lines = []
         for msg in messages:
             text = extract_user_text(msg.get("text", "")).strip()
-            if not text:
+
+            # Skip ## messages and empty messages
+            if not text or text.startswith("##"):
                 continue
-            # Bot messages have bot_id set; everything else is a user
+
             if msg.get("bot_id"):
                 context_lines.append(f"Bolb: {text}")
             else:
                 context_lines.append(f"User: {text}")
+
+        # Only keep the last CONTEXT_MESSAGES messages
+        context_lines = context_lines[-CONTEXT_MESSAGES:]
+        # print(context_lines)
 
         return "\n".join(context_lines)
 
@@ -100,7 +110,7 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> str:
         return ""
 
 
-def generate_response(context: str, max_new_tokens: int = 60) -> str:
+def generate_response(context: str, max_new_tokens: int = 120) -> str:
     """
     Generate a response using the fine-tuned LLM.
 
@@ -123,11 +133,11 @@ def generate_response(context: str, max_new_tokens: int = 60) -> str:
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                top_p=0.92,
-                top_k=40,
-                temperature=0.5,
+                top_p=0.98,
+                top_k=60,
+                temperature=0.6,
                 do_sample=True,
-                repetition_penalty=1.05,
+                repetition_penalty=1.07,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=[
                     tokenizer.eos_token_id,
@@ -153,6 +163,8 @@ def extract_user_text(message_text: str) -> str:
 
 def handle_response(client, channel: str, thread_ts: str, say, logger):
     """Fetch thread context and respond"""
+    global CONTEXT_MESSAGES
+
     if model is None:
         load_model()
 
@@ -167,7 +179,29 @@ def handle_response(client, channel: str, thread_ts: str, say, logger):
         say("I'm not sure what to say to that!", thread_ts=thread_ts)
         return
 
-    say(response, thread_ts=thread_ts)
+    last_bot_message = next((m["text"] for m in reversed(client.conversations_replies(channel=channel, ts=thread_ts)["messages"]) if m.get("bot_id")), None)
+    last_user_message = next((m["text"] for m in reversed(client.conversations_replies(channel=channel, ts=thread_ts)["messages"]) if not m.get("bot_id") and not m.get("subtype")), None)
+
+    # print(f"Last bot message: {last_bot_message}")
+    # print(f"Last user message: {last_user_message}")
+    # print(f"Response to be sent: {response}")
+
+    if last_bot_message != response:
+        # print("context used")
+        say(response, thread_ts=thread_ts)
+        CONTEXT_MESSAGES += 1  # Only use the last message as context for this retry
+    else:
+        # print("only last msg")
+        response = generate_response(last_user_message)
+        CONTEXT_MESSAGES = 1  # Only use the last message as context for this retry
+
+        if not response:
+            say("I'm not sure what to say to that!", thread_ts=thread_ts)
+            return
+
+        say(response, thread_ts=thread_ts)
+
+    #print(f"Response actually sent: {response}\n")
 
 
 @app.event("app_mention")
@@ -246,7 +280,7 @@ def main():
         print("Error: SLACK_APP_TOKEN not set in environment")
         return
 
-    print("Starting Slack bot...")
+    print(f"Starting Slack bot...")
     handler = SocketModeHandler(app, app_token)
     handler.start()
 
