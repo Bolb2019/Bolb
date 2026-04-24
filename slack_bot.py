@@ -191,7 +191,7 @@ def handle_response(client, channel: str, thread_ts: str, say, logger):
         say(response, thread_ts=thread_ts)
         CONTEXT_MESSAGES += 1  # Only use the last message as context for this retry
     else:
-        # print("only last msg")
+        print(f"Memory Wiped from >{last_user_message}< becuase of >{last_bot_message}<")
         response = generate_response(last_user_message)
         CONTEXT_MESSAGES = 1  # Only use the last message as context for this retry
 
