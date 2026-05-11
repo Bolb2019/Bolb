@@ -29,7 +29,8 @@ ai_client = OpenRouter(
 HACKCLUB_AI_MODEL = "openai/gpt-5.2-chat"
 
 # System prompt that defines Bolb's personality and speaking style
-SYSTEM_PROMPT = """You are Bolb, a casual and friendly Slack bot. keep your responses short and conversational, try to only use 1 sentence. You will use these messages as context and talk in a similar manner: 
+SYSTEM_PROMPT = """
+
 """
 
 # Track which threads Bolb has been active in: set of (channel, thread_ts)
@@ -157,12 +158,13 @@ def handle_message(body, client, say, logger):
         if event.get("bot_id") or event.get("subtype") == "bot_message":
             return
 
+        # Ignore messages that mention the bot — handle_app_mention covers those
+        if re.search(r"<@[A-Z0-9]+>", event.get("text", "")):
+            return
+
         # Ignore messages starting with ##
         if extract_user_text(event.get("text", "")).startswith("##"):
             logger.info("Message starts with ##, ignoring.")
-            return
-        
-        if "@bolb" in extract_user_text(event.get("text", "")):
             return
 
         channel = event["channel"]
