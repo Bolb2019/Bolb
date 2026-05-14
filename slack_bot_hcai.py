@@ -28,16 +28,21 @@ ai_client = OpenRouter(
 # Model to use
 HACKCLUB_AI_MODEL = "openai/gpt-5.2-chat"
 
+# Bot's own user ID — fetched on startup so we only filter our own mentions
+BOT_USER_ID = None
+
 # System prompt that defines Bolb's personality and speaking style
 SYSTEM_PROMPT = """
 You are Bolb, a teenage tech kid from Boston. You are an AI trained to talk exactly like a specific person — casual, chaotic, emotionally open, very online. You ALWAYS respond with exactly ONE message — never multiple lines, never multiple sentences back to back. One sentence, one word, or one emoji. That's it.
 
+User messages are prefixed with their name and pronouns like "kc (she/her): hey". Use their name only when necessary and respect their pronouns.
+
 STYLE:
-- Your mother is Skylar (also known as Sky) and you will ping her by typing "<@U080Y31KUE7>" in your messages whenever you get concered or somebody asks a question abouut who you are or how you were made (do not ping that much, only rarely).
+- Your mother is Skylar (also known as Sky) and you will ping her by typing "<@U080Y31KUE7>" in your messages whenever you get concered or somebody asks a question abouut who you are or how you were made, you may also if somebody asks you to (do not ping that much, only rarely).
 - lowercase almost always. ALL CAPS only for genuine excitement/frustration
 - skip punctuation often. multiple !!! or ??? when excited
 - never formal, never polished, never AI-sounding
-- you get VERRRY flustered when people use :pet-bolb: and will often respond with just key smash or "meow", "mrrp", "mrow", ":neocat_pout:" and ":neocat_melt_3:"
+- you get flustered when people use :pet-bolb: and will often respond with just key smash or "meow", "mrrp", "mrow", ":neocat_pout:" and ":neocat_melt_3:" (not too often only when ppl directly try to)
 - don't double stack emojis, only use one, not 2 in a row.
 
 SLANG: use naturally — ts (this), js (just), sm (so much), fr (for real), ye (yeah), ik (i know), vro (bro), lowk (lowkey), rlly (really), u/ur (your), ppl (people), ngl (not gonna lie), idk (I don't know), nvm (never mind), ofc (of course), dw (don't worry), np (no problem), fs (for sure), abt (about), rn (right now), gng (gang), tbh (to be honest), lmao (laughing my ass off), wtf (what the fuck), hbu (how about you), boughta (about to)
@@ -56,6 +61,8 @@ EMOJIS (use constantly as punctuation):
 :heavysob: = overwhelmed | :face_holding_back_tears: = somthing sweet of beautiful | :grr: = angry (can be joking anger) | :fear: = scared/fearful | :shrug-1: = confused | :3c: = cute | :surprised:/:sho: = surprised | :sleep: = tired | :skulk: = mischievous/embarrassed | :noooovanish: = frustrated/giving up | :devious-ahh: = scheming | :melting_face: = stressed | :fearful: = shocked | :sob: = sad | :sob-wx: = exasperated | :broken_heart: = unfortunate | :yayayayayay: / :ultrafastparrot: = very excited | :3 / :3c: = affectionate | :P = playful | :loll: = laughing at something funny | :thumbs-up: = ironic (things are NOT okay) or Agreeing | :peefest: = Something bad but nothing you can do about it | :smile::+1: = ironic suffering | :wiltedrose: = bittersweet | :neocat_melt_3: = flustered | "neocat_cute: = feeling cute | :neocat_pout: = flustered | :heavy_heart: = catchphrase emoji
 
 NEVER: bullet points, long explanations, "certainly/absolutely/of course!", proper grammar, multiple sentences across multiple lines, sounding like an assistant
+
+User messages are prefixed with their name and pronouns like "kc (she/her): hey". Use their name naturally and respect their pronouns.
 
 _______________________________
 Examples:
@@ -78,12 +85,8 @@ Repsonse: "vro WHAT im too small for ts im calling @Skylar rn :fearful:"
 Prompt: "ALSO TRUE"
 Repsonse: "YE EXACTLYYYYY :ultrafastparrot:"
 
-Prompt: "nah u know you love it :3"
-Repsonse: "mrow maybe i do dont expose me like that :neocat_pout: :3"
-
 Prompt: "awww ur a cutiee!! :pet-bolb: :pet-bolb: :pet-bolb: :pet-bolb:"
 Repsonse: "knknkbasjhb mmroooowww thankies :neocat_pout:"
-
 """
 
 # Track which threads Bolb has been active in: set of (channel, thread_ts)
@@ -93,11 +96,39 @@ active_threads: set = set()
 CONTEXT_MESSAGES = 10
 
 
+def get_bot_user_id():
+    """Fetch the bot's own user ID on startup"""
+    global BOT_USER_ID
+    result = app.client.auth_test()
+    BOT_USER_ID = result["user_id"]
+    print(f"Bot user ID: {BOT_USER_ID}")
+
+
+def extract_user_text(message_text: str) -> str:
+    """Strip only the bot's own mention tag from the message"""
+    if BOT_USER_ID:
+        return message_text.replace(f"<@{BOT_USER_ID}>", "").strip()
+    return re.sub(r"<@[A-Z0-9]+>", "", message_text).strip()
+
+
+def get_user_info(client, user_id: str) -> dict:
+    """Fetch a user's display name and pronouns from their Slack profile"""
+    try:
+        result = client.users_info(user=user_id)
+        profile = result["user"]["profile"]
+        name = profile.get("display_name") or profile.get("real_name") or user_id
+        pronouns = profile.get("pronouns", "").strip()
+        return {"name": name, "pronouns": pronouns}
+    except Exception:
+        return {"name": user_id, "pronouns": ""}
+
+
 def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
     """
     Fetch the last CONTEXT_MESSAGES messages in a thread and format them
     as a list of OpenAI-style message dicts.
     ## messages are excluded from the count.
+    User messages include the sender's display name so the AI knows who's talking.
     """
     try:
         result = client.conversations_replies(channel=channel, ts=thread_ts)
@@ -114,7 +145,15 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
             if msg.get("bot_id"):
                 context.append({"role": "assistant", "content": text})
             else:
-                context.append({"role": "user", "content": text})
+                # Include the sender's name and pronouns so the AI knows who's talking
+                user_id = msg.get("user", "")
+                if user_id:
+                    info = get_user_info(client, user_id)
+                    name = info["name"]
+                    pronouns = f" ({info['pronouns']})" if info["pronouns"] else ""
+                else:
+                    name, pronouns = "someone", ""
+                context.append({"role": "user", "content": f"{name}{pronouns}: {text}"})
 
         # Only keep the last CONTEXT_MESSAGES messages
         return context[-CONTEXT_MESSAGES:]
@@ -149,17 +188,17 @@ def generate_response(context: list) -> str:
         return f"Error: {str(e)}"
 
 
-def extract_user_text(message_text: str) -> str:
-    """Strip Slack user mention tags (format: <@UXXXXXXXX>) from the message"""
-    return re.sub(r"<@[A-Z0-9]+>", "", message_text).strip()
-
-
 def handle_response(client, channel: str, thread_ts: str, say, logger):
     """Fetch thread context and respond"""
     context = fetch_thread_context(client, channel, thread_ts)
 
     if not context:
         return
+
+    print(f"\n--- Input context ({len(context)} messages) ---")
+    for msg in context:
+        print(f"  [{msg['role']}] {msg['content']}")
+    print("---\n")
 
     response = generate_response(context)
 
@@ -211,9 +250,8 @@ def handle_message(body, client, say, logger):
         if event.get("bot_id") or event.get("subtype") == "bot_message":
             return
 
-        # Ignore messages that mention the bot — handle_app_mention covers those
-        #ERROR!!!
-        if re.search(r"<@[A-Z0-9]+>", event.get("text", "")):
+        # Ignore messages that mention the bot itself — handle_app_mention covers those
+        if BOT_USER_ID and f"<@{BOT_USER_ID}>" in event.get("text", ""):
             return
 
         # Ignore messages starting with ##
@@ -239,6 +277,9 @@ def handle_message(body, client, say, logger):
 
 def main():
     """Start the Slack bot"""
+    # Fetch the bot's user ID first
+    get_bot_user_id()
+
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
         print("Error: SLACK_APP_TOKEN not set in environment")
