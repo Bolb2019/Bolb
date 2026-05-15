@@ -74,8 +74,6 @@ py -3.12 diagnostics.py
 
 MIT
 
----
-
 ## Disclosure of AI usage:
 
 Claude Sonnet 4.6 was used to create a lot of this project but I did put in a lot of genuine work and probably put in more time than was tracked. but genAI was used to aid coding.
