@@ -220,14 +220,17 @@ def _process_queue(key, client, say, logger):
         if not context:
             continue
 
-        print(f"\n--- Input context ({len(context)} messages) ---")
-        for msg in context:
-            print(f"  [{msg['role']}] {msg['content']}")
-        print("---\n")
+        # Don't log DMs (Slack DM channel IDs start with "D")
+        if not channel.startswith("D"):
+            print(f"\n--- Input context ({len(context)} messages) ---")
+            for msg in context:
+                print(f"  [{msg['role']}] {msg['content']}")
+            print("---\n")
 
         response = generate_response(context)
         if response:
-            print(f"Response: {response}")
+            if not channel.startswith("D"):
+                print(f"Response: {response}")
             say(response, thread_ts=thread_ts)
         else:
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -257,6 +260,10 @@ def handle_app_mention(body, client, say, logger):
     """Handle @bolb mentions — mark the thread as active and respond"""
     try:
         event = body["event"]
+
+        # Ignore mentions from other bots (bot_id present, or user ID starts with B)
+        if event.get("bot_id") or event.get("user", "").startswith("B"):
+            return
 
         # Ignore messages starting with ##
         if extract_user_text(event.get("text", "")).startswith("##"):
