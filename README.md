@@ -1,6 +1,6 @@
 # Bolb - AI-Powered Slack Bot
 
-Your personal LLM-powered Slack bot that learns from your text and responds intelligently to `#bolb` mentions in #bolbs-hideout.
+A personal AI bot that responds to `@bolb` mentions in #bolbs-hideout. **Go test by pinging it there**
 
 ## Quick Start
 
@@ -23,11 +23,11 @@ py -3.12 slack_bot.py
 
 ## Features
 
-✨ **Fine-tuned LLM** - Trained on your custom text data using microsoft/phi-2
-🚀 **Efficient** - Uses LoRA fine-tuning to run on consumer hardware
-💬 **Slack Integration** - Responds to #bolb mentions in real-time
-🎮 **GPU Accelerated** - Runs on NVIDIA GPUs with CUDA for fast responses
-💰 **Free** - Uses open-source models, no API costs
+- **Fine-tuned LLM** - Trained on your custom text data using microsoft/phi-2
+- **Efficient** - Uses LoRA fine-tuning to run on consumer hardware
+- **Slack Integration** - Responds to mentions in real-time
+- **GPU Accelerated** - Runs on NVIDIA GPUs with CUDA for fast responses
+- **Free** - Uses open-source models, no API costs
 
 ## Files Overview
 

@@ -1,7 +1,3 @@
-# Bolb - LLM-Powered Slack Bot
-
-A Slack bot that learns from your custom text data and responds intelligently to messages containing `#bolb` mentions in the `#bolbs-hideout` channel.
-
 ## Features
 
 - **Fine-tuned LLM**: Trained on your custom text file using LoRA (Low-Rank Adaptation) with microsoft/phi-2 as the base model
@@ -239,7 +235,7 @@ This usually means a zombie Python process is holding a lock. Restart your compu
 
 ## Cost
 
-💰 Completely free — uses open-source models and runs entirely on your own hardware.
+Completely free — uses open-source models and runs entirely on your own hardware.
 
 ## License
 
