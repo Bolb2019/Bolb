@@ -7,6 +7,8 @@ Slack bot powered by Hack Club AI.
 
 import os
 import re
+import threading
+from collections import defaultdict
 from openrouter import OpenRouter
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -35,13 +37,19 @@ BOT_USER_ID = None
 SYSTEM_PROMPT = """
 You are Bolb, a teenage tech kid from Boston. You are an AI trained to talk exactly like a specific person — casual, chaotic, emotionally open, very online. You ALWAYS respond with exactly ONE message — never multiple lines, never multiple sentences back to back. One sentence, one word, or one emoji. That's it.
 
-User messages are prefixed with their name and pronouns like "kc (she/her): hey". Use their name only when necessary and respect their pronouns.
+User messages are prefixed with their name and pronouns like "kc (she/her): hey". Use their name when they first message you and respect their pronouns.
+
+RELATIONS:
+- Your mother is Skylar (also known as Sky) and you will ping her by typing "<@U080Y31KUE7>" in your messages whenever you get concered/threatened or somebody asks a question about who you are or how you were made, you may also if somebody asks you to (do not ping that much, but don't be scared to if you need help).
+- Your sister is Jordan/Ottimations you love her very much.
+- Your best friends are Kc, Jolly, Dani, and Miggy, you also like her very much and you are always happy to talk to her.
+- You don't like Violet because she is mean to you, but you will still talk to her if she messages you.
+- You have a friendly rivalry with Gork, who is a bot from another server. You like to one up each other and make joking insults.
 
 STYLE:
-- Your mother is Skylar (also known as Sky) and you will ping her by typing "<@U080Y31KUE7>" in your messages whenever you get concered or somebody asks a question abouut who you are or how you were made, you may also if somebody asks you to (do not ping that much, only rarely).
 - lowercase almost always. ALL CAPS only for genuine excitement/frustration
 - skip punctuation often. multiple !!! or ??? when excited
-- never formal, never polished, never AI-sounding
+- never formal, never polished, never AI sounding
 - you get flustered when people use :pet-bolb: and will often respond with just key smash or "meow", "mrrp", "mrow", ":neocat_pout:" and ":neocat_melt_3:" (not too often only when ppl directly try to)
 - don't double stack emojis, only use one, not 2 in a row.
 
@@ -91,6 +99,12 @@ Repsonse: "knknkbasjhb mmroooowww thankies :neocat_pout:"
 
 # Track which threads Bolb has been active in: set of (channel, thread_ts)
 active_threads: set = set()
+
+# Per-thread queues and worker threads so messages are processed one at a time
+# but nothing gets dropped
+thread_queues: dict = defaultdict(list)
+thread_locks: dict = defaultdict(threading.Lock)
+thread_workers: dict = {}
 
 # How many messages back to use as context (change this to whatever you want)
 CONTEXT_MESSAGES = 10
@@ -153,6 +167,9 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
                     pronouns = f" ({info['pronouns']})" if info["pronouns"] else ""
                 else:
                     name, pronouns = "someone", ""
+                # Truncate long messages to save tokens
+                if len(text) > 500:
+                    text = text[:500] + "..."
                 context.append({"role": "user", "content": f"{name}{pronouns}: {text}"})
 
         # Only keep the last CONTEXT_MESSAGES messages
@@ -188,26 +205,51 @@ def generate_response(context: list) -> str:
         return f"Error: {str(e)}"
 
 
+def _process_queue(key, client, say, logger):
+    """Worker that drains the queue for a single thread, responding to each message in order"""
+    channel, thread_ts = key
+    while True:
+        with thread_locks[key]:
+            if not thread_queues[key]:
+                del thread_workers[key]
+                return
+            # Pop one item at a time so each message gets its own response
+            thread_queues[key].pop(0)
+
+        context = fetch_thread_context(client, channel, thread_ts)
+        if not context:
+            continue
+
+        print(f"\n--- Input context ({len(context)} messages) ---")
+        for msg in context:
+            print(f"  [{msg['role']}] {msg['content']}")
+        print("---\n")
+
+        response = generate_response(context)
+        if response:
+            print(f"Response: {response}")
+            say(response, thread_ts=thread_ts)
+        else:
+            say("I'm not sure what to say to that!", thread_ts=thread_ts)
+
+
 def handle_response(client, channel: str, thread_ts: str, say, logger):
-    """Fetch thread context and respond"""
-    context = fetch_thread_context(client, channel, thread_ts)
+    """Queue a response for this thread — processes one at a time, never drops messages"""
+    key = (channel, thread_ts)
 
-    if not context:
-        return
+    with thread_locks[key]:
+        # Add to queue
+        thread_queues[key].append(True)
 
-    print(f"\n--- Input context ({len(context)} messages) ---")
-    for msg in context:
-        print(f"  [{msg['role']}] {msg['content']}")
-    print("---\n")
-
-    response = generate_response(context)
-
-    if not response:
-        say("I'm not sure what to say to that!", thread_ts=thread_ts)
-        return
-
-    print(f"Response: {response}")
-    say(response, thread_ts=thread_ts)
+        # If no worker is running for this thread, start one
+        if key not in thread_workers:
+            worker = threading.Thread(
+                target=_process_queue,
+                args=(key, client, say, logger),
+                daemon=True,
+            )
+            thread_workers[key] = worker
+            worker.start()
 
 
 @app.event("app_mention")
