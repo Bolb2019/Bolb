@@ -149,7 +149,7 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
         messages = result.get("messages", [])
 
         context = []
-        for msg in messages:
+        for msg in messages[-CONTEXT_MESSAGES:]:
             text = extract_user_text(msg.get("text", "")).strip()
 
             # Skip ## messages and empty messages
@@ -173,7 +173,7 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
                 context.append({"role": "user", "content": f"{name}{pronouns}: {text}"})
 
         # Only keep the last CONTEXT_MESSAGES messages
-        return context[-CONTEXT_MESSAGES:]
+        return context
 
     except Exception as e:
         print(f"Error fetching thread context: {e}")
