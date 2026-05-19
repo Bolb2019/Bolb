@@ -107,7 +107,7 @@ thread_locks: dict = defaultdict(threading.Lock)
 thread_workers: dict = {}
 
 # How many messages back to use as context (change this to whatever you want)
-CONTEXT_MESSAGES = 10
+CONTEXT_MESSAGES = 25
 
 
 def get_bot_user_id():
