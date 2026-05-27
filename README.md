@@ -1,4 +1,4 @@
-To test what a bot using this could look like you can chack out the one I made by mentioning <u>@bolb</u> in *#bolbs-testgrounds* (In hackclubs workplace) **Go test it by pinging it there**.
+To test what a bot using this could look like you can check out the one I made by mentioning <u>@bolb</u> in *#bolbs-testgrounds* (In hackclubs workplace) **Go test it by pinging it there**.
 
 # General setup
 
@@ -40,7 +40,7 @@ When installations and training finish the bot should be ready!
 
 ## Testing / running
 
-Used to chat with the AI locally (Doesn't fully work, AI will behave differntly in slack, only use if you cannot use slack).
+Used to chat with the AI locally (Doesn't fully work, AI will behave differently in slack, only use if you cannot use slack).
 ```bash
 py -3.12 chat.py
 ```
@@ -78,7 +78,7 @@ Using Hack club AI makes the process a lot easier to set up. also works by just 
 
 ## Testing / running
 
-there isn't a whole lot in terms of testing outside of during runtime, so there is only one script to run the bot in slack.
+there isn't a whole lot in terms of testing outside of runtime, so there is only one script to run the bot in slack.
 
 ```bash
 python slack_bot_hcai.py #(or py -3.12 slack_bot_hcai.py)
@@ -91,3 +91,4 @@ python slack_bot_hcai.py #(or py -3.12 slack_bot_hcai.py)
 ## Disclosure of AI usage:
 
 Claude Sonnet 4.6 was used to create a lot of this project but I did put in a lot of genuine work and probably put in more time than was tracked. but genAI was used to aid coding.
+
