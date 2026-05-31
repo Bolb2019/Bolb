@@ -63,6 +63,10 @@ py -3.12 slack_bot.py
 - GPU
 - terminal access (whatever works, but scripts are in cmd)
 
+## Commands
+
+- Start messages with "##" and the AI will ignore them.
+
 # Hack club AI llm
 
 Using Hack club AI makes the process a lot easier to set up. also works by just mentioning the bot and it should respond!
@@ -87,6 +91,10 @@ python slack_bot_hcai.py #(or py -3.12 slack_bot_hcai.py)
 ## Requirements
 
 - terminal access (whatever works, but scripts are in cmd)
+
+## Commands
+
+- Start messages with "##" and the AI will ignore them.
 
 ## Disclosure of AI usage:
 
