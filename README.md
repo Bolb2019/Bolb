@@ -18,6 +18,10 @@ You will need a slack bot, go to https://api.slack.com/apps and:
 5. Add the _'Bot User OAuth Token'_ to the .env as **"SLACK_BOT_TOKEN"**.
 6. in Event subscriptions add _'app\_mention'_ and _'message.channels'_.
 7. Install the app to the workspace.
+8. run:
+    ```bash
+    python pip install -r requirements.txt #(or py -3.12 -m pip install -r requirements.txt)
+    ```
 
 # Local llm
 
@@ -32,7 +36,6 @@ A local bot that responds to mentioning it and it should respond!
 3. Run this to install requirements and train the llm
     ```bash
     py -3.12 -m pip install torch --index-url https://download.pytorch.org/whl/cu121
-    py -3.12 -m pip install -r requirements.txt
     py -3.12 train_llm.py training_data.txt
     ```
 
