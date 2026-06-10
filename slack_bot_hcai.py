@@ -8,11 +8,16 @@ Slack bot powered by Hack Club AI.
 import os
 import re
 import threading
+import logging
 from collections import defaultdict
 from openrouter import OpenRouter
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # Load environment variables
@@ -115,7 +120,7 @@ def get_bot_user_id():
     global BOT_USER_ID
     result = app.client.auth_test()
     BOT_USER_ID = result["user_id"]
-    print(f"Bot user ID: {BOT_USER_ID}")
+    logger.info(f"Bot user ID: {BOT_USER_ID}")
 
 
 def extract_user_text(message_text: str) -> str:
@@ -176,8 +181,21 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
         return context
 
     except Exception as e:
-        print(f"Error fetching thread context: {e}")
+        logger.error(f"Error fetching thread context: {e}")
         return []
+
+
+def is_bot_message(client, channel: str, message_ts: str) -> bool:
+    """Check if a message was sent by the bot"""
+    try:
+        result = client.conversations_history(channel=channel, latest=message_ts, limit=1, inclusive=True)
+        messages = result.get("messages", [])
+        if messages:
+            return bool(messages[0].get("bot_id"))
+        return False
+    except Exception as e:
+        logger.error(f"Error checking if message is from bot: {e}")
+        return False
 
 
 def generate_response(context: list) -> str:
@@ -201,7 +219,7 @@ def generate_response(context: list) -> str:
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-        print(f"Error generating response: {e}")
+        logger.error(f"Error generating response: {e}")
         return f"Error: {str(e)}"
 
 
@@ -222,15 +240,15 @@ def _process_queue(key, client, say, logger):
 
         # Don't log DMs (Slack DM channel IDs start with "D")
         if not channel.startswith("D"):
-            print(f"\n--- Input context ({len(context)} messages) ---")
+            logger.info(f"\n--- Input context ({len(context)} messages) ---")
             for msg in context:
-                print(f"  [{msg['role']}] {msg['content']}")
-            print("---\n")
+                logger.info(f"  [{msg['role']}] {msg['content']}")
+            logger.info("---\n")
 
         response = generate_response(context)
         if response:
             if not channel.startswith("D"):
-                print(f"Response: {response}")
+                logger.info(f"Response: {response}")
             say(response, thread_ts=thread_ts)
         else:
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -284,13 +302,49 @@ def handle_app_mention(body, client, say, logger):
         say(f"Sorry, I encountered an error: {str(e)}")
 
 
+@app.event("member_joined_channel")
+def handle_member_joined_channel(body, client, say, logger):
+    """
+    Handle when a user joins a channel.
+    Send an AI-generated welcome message in #skylars-hideout specifically.
+    """
+    try:
+        event = body["event"]
+        channel = event["channel"]
+        user_id = event.get("user")
+        
+        # Get channel info to check the channel name
+        channel_info = client.conversations_info(channel=channel)
+        channel_name = channel_info["channel"]["name"]
+        
+        # Only send message if joining #skylars-hideout or #sky
+        if channel_name in ["skylars-hideout", "sky-is-probably-a-girl-yayay"]:
+            # Get user info
+            user_info = get_user_info(client, user_id)
+            user_name = user_info["name"]
+            
+            # Create a context for the AI to generate a welcome message
+            welcome_prompt = f"Someone just joined the channel! Their name is {user_name}. Give them a quick, casual welcome! and ping sky (<@U080Y31KUE7>) in the message to let her know a new person joined."
+            context = [{"role": "user", "content": welcome_prompt}]
+            
+            # Generate the welcome message
+            welcome_msg = generate_response(context)
+            
+            # Post the generated message
+            client.chat_postMessage(channel=channel, text=welcome_msg)
+            logger.info(f"Sent AI-generated welcome message to {channel_name}")
+    
+    except Exception as e:
+        logger.error(f"Error handling member_joined_channel: {e}")
+
+
 @app.event("message")
 def handle_message(body, client, say, logger):
     """
     Handle all messages:
     - In DMs: always respond
     - In channels: respond if this is a thread Bolb is already active in,
-                   and the message isn't from the bot itself
+                   or if replying to a message Bolb sent
     """
     try:
         event = body["event"]
@@ -311,6 +365,7 @@ def handle_message(body, client, say, logger):
         channel = event["channel"]
         channel_type = event.get("channel_type")
         thread_ts = event.get("thread_ts") or event["ts"]
+        message_ts = event["ts"]
 
         if channel_type == "im":
             # Always respond in DMs
@@ -319,6 +374,14 @@ def handle_message(body, client, say, logger):
         elif (channel, thread_ts) in active_threads:
             # Respond to any new message in a thread where Bolb was mentioned
             handle_response(client, channel, thread_ts, say, logger)
+
+        elif event.get("thread_ts"):
+            # Check if this is a reply to a message the bot sent
+            if is_bot_message(client, channel, thread_ts):
+                # Mark this thread as active and respond
+                active_threads.add((channel, thread_ts))
+                logger.info(f"Now active in thread {thread_ts} in {channel} (reply to bot message)")
+                handle_response(client, channel, thread_ts, say, logger)
 
     except Exception as e:
         logger.error(f"Error handling message: {e}")
@@ -331,10 +394,10 @@ def main():
 
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
-        print("Error: SLACK_APP_TOKEN not set in environment")
+        logger.error("Error: SLACK_APP_TOKEN not set in environment")
         return
 
-    print(f"Starting Bolb (model: {HACKCLUB_AI_MODEL}, context: {CONTEXT_MESSAGES} messages)...")
+    logger.info(f"Starting Bolb (model: {HACKCLUB_AI_MODEL}, context: {CONTEXT_MESSAGES} messages)...")
     handler = SocketModeHandler(app, app_token)
     handler.start()
 
