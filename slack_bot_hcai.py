@@ -107,6 +107,9 @@ thread_queues: dict = defaultdict(list)
 thread_locks: dict = defaultdict(threading.Lock)
 thread_workers: dict = {}
 
+# Track event timestamps for latency measurement
+event_timestamps: dict = {}
+
 # How many messages back to use as context (change this to whatever you want)
 CONTEXT_MESSAGES = 25
 
@@ -216,6 +219,7 @@ def _process_queue(key, client, say, logger):
     """Worker that drains the queue for a single thread, responding to each message in order"""
     channel, thread_ts = key
     while True:
+        queue_wait_start = time.time()
         with thread_locks[key]:
             if not thread_queues[key]:
                 print(f"[QUEUE] Worker for {thread_ts} exiting (queue empty)")
@@ -225,6 +229,8 @@ def _process_queue(key, client, say, logger):
             queue_size = len(thread_queues[key])
             thread_queues[key].pop(0)
             print(f"[QUEUE] Processing message ({queue_size} in queue)")
+        queue_lock_time = time.time() - queue_wait_start
+        print(f"[QUEUE] Lock acquisition time: {queue_lock_time:.2f}s")
 
         process_start = time.time()
         context = fetch_thread_context(client, channel, thread_ts)
@@ -244,8 +250,19 @@ def _process_queue(key, client, say, logger):
         if response:
             if not channel.startswith("D"):
                 print(f"Response: {response}")
-            print(f"[TOTAL] Processed in {total_time:.2f}s")
+            print(f"[PROCESSING] Fetch+API time: {total_time:.2f}s")
+            
+            # Time the say() call
+            say_start = time.time()
             say(response, thread_ts=thread_ts)
+            say_time = time.time() - say_start
+            print(f"[SLACK] say() call took {say_time:.2f}s")
+            
+            # Calculate total latency from event timestamp
+            if key in event_timestamps:
+                total_latency = time.time() - event_timestamps[key]
+                print(f"[TOTAL_LATENCY] Event to response: {total_latency:.2f}s")
+                del event_timestamps[key]
         else:
             print(f"[WARN] No response generated")
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -280,7 +297,8 @@ def handle_app_mention(body, client, say, logger):
     """Handle @bolb mentions — mark the thread as active and respond"""
     try:
         event = body["event"]
-        print(f"[EVENT] @mention received at {time.time()}")
+        event_time = time.time()
+        print(f"[EVENT] @mention received at {event_time}")
 
         # Ignore mentions from other bots (bot_id present, or user ID starts with B)
         if event.get("bot_id") or event.get("user", "").startswith("B"):
@@ -295,6 +313,10 @@ def handle_app_mention(body, client, say, logger):
 
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
+        key = (channel, thread_ts)
+        
+        # Store event timestamp early for accurate latency tracking
+        event_timestamps[key] = event_time
 
         # Mark this thread as one Bolb is active in
         active_threads.add((channel, thread_ts))
@@ -355,7 +377,8 @@ def handle_message(body, client, say, logger):
     """
     try:
         event = body["event"]
-        print(f"[EVENT] Message received at {time.time()}")
+        event_time = time.time()
+        print(f"[EVENT] Message received at {event_time}")
 
         # Ignore bot messages to avoid infinite loops
         if event.get("bot_id") or event.get("subtype") == "bot_message":
@@ -376,6 +399,7 @@ def handle_message(body, client, say, logger):
         channel = event["channel"]
         channel_type = event.get("channel_type")
         thread_ts = event.get("thread_ts") or event["ts"]
+        key = (channel, thread_ts)
 
         # Check for !stop command to deactivate thread
         text = extract_user_text(event.get("text", "")).lower()
@@ -384,6 +408,9 @@ def handle_message(body, client, say, logger):
             active_threads.discard((channel, thread_ts))
             say("ok stopping :wavey:", thread_ts=thread_ts)
             return
+        
+        # Store event timestamp early for accurate latency tracking
+        event_timestamps[key] = event_time
 
         if channel_type == "im":
             # Always respond in DMs
