@@ -8,6 +8,7 @@ Slack bot powered by Hack Club AI.
 import os
 import re
 import threading
+import time
 from collections import defaultdict
 from openrouter import OpenRouter
 from slack_bolt import App
@@ -144,9 +145,11 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
     ## messages are excluded from the count.
     User messages include the sender's display name so the AI knows who's talking.
     """
+    fetch_start = time.time()
     try:
         result = client.conversations_replies(channel=channel, ts=thread_ts)
         messages = result.get("messages", [])
+        print(f"[FETCH] Retrieved {len(messages)} messages in {time.time() - fetch_start:.2f}s")
 
         context = []
         for msg in messages[-CONTEXT_MESSAGES:]:
@@ -190,7 +193,9 @@ def generate_response(context: list) -> str:
     Returns:
         Generated text
     """
+    api_start = time.time()
     try:
+        print(f"[API] Calling OpenRouter with {len(context)} context messages...")
         response = ai_client.chat.send(
             model=HACKCLUB_AI_MODEL,
             messages=[
@@ -198,6 +203,8 @@ def generate_response(context: list) -> str:
                 *context,
             ],
         )
+        api_time = time.time() - api_start
+        print(f"[API] Response received in {api_time:.2f}s")
         return response.choices[0].message.content.strip()
 
     except Exception as e:
@@ -211,13 +218,18 @@ def _process_queue(key, client, say, logger):
     while True:
         with thread_locks[key]:
             if not thread_queues[key]:
+                print(f"[QUEUE] Worker for {thread_ts} exiting (queue empty)")
                 del thread_workers[key]
                 return
             # Pop one item at a time so each message gets its own response
+            queue_size = len(thread_queues[key])
             thread_queues[key].pop(0)
+            print(f"[QUEUE] Processing message ({queue_size} in queue)")
 
+        process_start = time.time()
         context = fetch_thread_context(client, channel, thread_ts)
         if not context:
+            print(f"[WARN] No context retrieved")
             continue
 
         # Don't log DMs (Slack DM channel IDs start with "D")
@@ -228,24 +240,30 @@ def _process_queue(key, client, say, logger):
             print("---\n")
 
         response = generate_response(context)
+        total_time = time.time() - process_start
         if response:
             if not channel.startswith("D"):
                 print(f"Response: {response}")
+            print(f"[TOTAL] Processed in {total_time:.2f}s")
             say(response, thread_ts=thread_ts)
         else:
+            print(f"[WARN] No response generated")
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
 
 
 def handle_response(client, channel: str, thread_ts: str, say, logger):
     """Queue a response for this thread — processes one at a time, never drops messages"""
     key = (channel, thread_ts)
+    print(f"[HANDLE] Queueing response for {thread_ts}")
 
     with thread_locks[key]:
         # Add to queue
         thread_queues[key].append(True)
+        print(f"[QUEUE] Added to queue, now {len(thread_queues[key])} items")
 
         # If no worker is running for this thread, start one
         if key not in thread_workers:
+            print(f"[QUEUE] Starting new worker for {thread_ts}")
             worker = threading.Thread(
                 target=_process_queue,
                 args=(key, client, say, logger),
@@ -253,6 +271,8 @@ def handle_response(client, channel: str, thread_ts: str, say, logger):
             )
             thread_workers[key] = worker
             worker.start()
+        else:
+            print(f"[QUEUE] Worker already running for {thread_ts}")
 
 
 @app.event("app_mention")
@@ -260,13 +280,16 @@ def handle_app_mention(body, client, say, logger):
     """Handle @bolb mentions — mark the thread as active and respond"""
     try:
         event = body["event"]
+        print(f"[EVENT] @mention received at {time.time()}")
 
         # Ignore mentions from other bots (bot_id present, or user ID starts with B)
         if event.get("bot_id") or event.get("user", "").startswith("B"):
+            print(f"[SKIP] Ignoring bot message")
             return
 
         # Ignore messages starting with ##
         if extract_user_text(event.get("text", "")).startswith("##"):
+            print(f"[SKIP] Message starts with ##")
             logger.info("Message starts with ##, ignoring.")
             return
 
@@ -275,6 +298,7 @@ def handle_app_mention(body, client, say, logger):
 
         # Mark this thread as one Bolb is active in
         active_threads.add((channel, thread_ts))
+        print(f"[ACTIVE] Marked thread {thread_ts} as active")
         logger.info(f"Now active in thread {thread_ts} in {channel}")
 
         handle_response(client, channel, thread_ts, say, logger)
@@ -300,7 +324,7 @@ def handle_member_joined_channel(body, client, say, logger):
         channel_name = channel_info["channel"]["name"]
         
         # Only send message if joining #skylars-hideout or #sky
-        if channel_name in ["skylars-hideout", "sky-is-probably-a-girl-yayay"]:
+        if channel_name in ["skylars-hideout", "sky-is-probably-a-girl-yayay", "bolbs-testgrounds"]:
             # Get user info
             user_info = get_user_info(client, user_id)
             user_name = user_info["name"]
@@ -330,17 +354,21 @@ def handle_message(body, client, say, logger):
     """
     try:
         event = body["event"]
+        print(f"[EVENT] Message received at {time.time()}")
 
         # Ignore bot messages to avoid infinite loops
         if event.get("bot_id") or event.get("subtype") == "bot_message":
+            print(f"[SKIP] Ignoring bot message")
             return
 
         # Ignore messages that mention the bot itself — handle_app_mention covers those
         if BOT_USER_ID and f"<@{BOT_USER_ID}>" in event.get("text", ""):
+            print(f"[SKIP] Ignoring bot mention (handled by app_mention)")
             return
 
         # Ignore messages starting with ##
         if extract_user_text(event.get("text", "")).startswith("##"):
+            print(f"[SKIP] Message starts with ##")
             logger.info("Message starts with ##, ignoring.")
             return
 
@@ -350,11 +378,15 @@ def handle_message(body, client, say, logger):
 
         if channel_type == "im":
             # Always respond in DMs
+            print(f"[RESPOND] DM detected")
             handle_response(client, channel, thread_ts, say, logger)
 
         elif (channel, thread_ts) in active_threads:
             # Respond to any new message in a thread where Bolb was mentioned
+            print(f"[RESPOND] Active thread detected")
             handle_response(client, channel, thread_ts, say, logger)
+        else:
+            print(f"[SKIP] Not in active thread")
 
     except Exception as e:
         logger.error(f"Error handling message: {e}")
