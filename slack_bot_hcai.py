@@ -180,19 +180,6 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
         return []
 
 
-def is_bot_message(client, channel: str, message_ts: str) -> bool:
-    """Check if a message was sent by the bot"""
-    try:
-        result = client.conversations_history(channel=channel, latest=message_ts, limit=1, inclusive=True)
-        messages = result.get("messages", [])
-        if messages:
-            return bool(messages[0].get("bot_id"))
-        return False
-    except Exception as e:
-        print(f"Error checking if message is from bot: {e}")
-        return False
-
-
 def generate_response(context: list) -> str:
     """
     Generate a response using Hack Club AI.
@@ -339,7 +326,7 @@ def handle_message(body, client, say, logger):
     Handle all messages:
     - In DMs: always respond
     - In channels: respond if this is a thread Bolb is already active in,
-                   or if replying to a message Bolb sent
+                   and the message isn't from the bot itself
     """
     try:
         event = body["event"]
@@ -360,7 +347,6 @@ def handle_message(body, client, say, logger):
         channel = event["channel"]
         channel_type = event.get("channel_type")
         thread_ts = event.get("thread_ts") or event["ts"]
-        message_ts = event["ts"]
 
         if channel_type == "im":
             # Always respond in DMs
@@ -369,14 +355,6 @@ def handle_message(body, client, say, logger):
         elif (channel, thread_ts) in active_threads:
             # Respond to any new message in a thread where Bolb was mentioned
             handle_response(client, channel, thread_ts, say, logger)
-
-        elif event.get("thread_ts"):
-            # Check if this is a reply to a message the bot sent
-            if is_bot_message(client, channel, thread_ts):
-                # Mark this thread as active and respond
-                active_threads.add((channel, thread_ts))
-                logger.info(f"Now active in thread {thread_ts} in {channel} (reply to bot message)")
-                handle_response(client, channel, thread_ts, say, logger)
 
     except Exception as e:
         logger.error(f"Error handling message: {e}")
