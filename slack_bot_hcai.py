@@ -252,17 +252,15 @@ def _process_queue(key, client, say, logger):
                 print(f"Response: {response}")
             print(f"[PROCESSING] Fetch+API time: {total_time:.2f}s")
             
-            # Time the say() call
-            say_start = time.time()
-            say(response, thread_ts=thread_ts)
-            say_time = time.time() - say_start
-            print(f"[SLACK] say() call took {say_time:.2f}s")
+            # Post to Slack in background thread so it doesn't block the queue
+            def post_to_slack():
+                say_start = time.time()
+                say(response, thread_ts=thread_ts)
+                say_time = time.time() - say_start
+                print(f"[SLACK] say() call took {say_time:.2f}s")
             
-            # Calculate total latency from event timestamp
-            if key in event_timestamps:
-                total_latency = time.time() - event_timestamps[key]
-                print(f"[TOTAL_LATENCY] Event to response: {total_latency:.2f}s")
-                del event_timestamps[key]
+            slack_thread = threading.Thread(target=post_to_slack, daemon=True)
+            slack_thread.start()
         else:
             print(f"[WARN] No response generated")
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
