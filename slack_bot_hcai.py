@@ -351,6 +351,7 @@ def handle_message(body, client, say, logger):
     - In DMs: always respond
     - In channels: respond if this is a thread Bolb is already active in,
                    and the message isn't from the bot itself
+    - Special command: !stop to remove thread from active threads
     """
     try:
         event = body["event"]
@@ -375,6 +376,14 @@ def handle_message(body, client, say, logger):
         channel = event["channel"]
         channel_type = event.get("channel_type")
         thread_ts = event.get("thread_ts") or event["ts"]
+
+        # Check for !stop command to deactivate thread
+        text = extract_user_text(event.get("text", "")).lower()
+        if text == "!stop":
+            print(f"[STOP] !stop command detected in {thread_ts}")
+            active_threads.discard((channel, thread_ts))
+            say("ok stopping :wavey:", thread_ts=thread_ts)
+            return
 
         if channel_type == "im":
             # Always respond in DMs

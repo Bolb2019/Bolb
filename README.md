@@ -98,6 +98,7 @@ python slack_bot_hcai.py #(or py -3.12 slack_bot_hcai.py)
 ## Commands
 
 - Start messages with "##" and the AI will ignore them.
+- !stop to have the bot stop messaging in a thread.
 
 ## Disclosure of AI usage:
 
