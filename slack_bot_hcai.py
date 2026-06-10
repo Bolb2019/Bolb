@@ -8,16 +8,11 @@ Slack bot powered by Hack Club AI.
 import os
 import re
 import threading
-import logging
 from collections import defaultdict
 from openrouter import OpenRouter
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 # Load environment variables
@@ -120,7 +115,7 @@ def get_bot_user_id():
     global BOT_USER_ID
     result = app.client.auth_test()
     BOT_USER_ID = result["user_id"]
-    logger.info(f"Bot user ID: {BOT_USER_ID}")
+    print(f"Bot user ID: {BOT_USER_ID}")
 
 
 def extract_user_text(message_text: str) -> str:
@@ -181,7 +176,7 @@ def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
         return context
 
     except Exception as e:
-        logger.error(f"Error fetching thread context: {e}")
+        print(f"Error fetching thread context: {e}")
         return []
 
 
@@ -194,7 +189,7 @@ def is_bot_message(client, channel: str, message_ts: str) -> bool:
             return bool(messages[0].get("bot_id"))
         return False
     except Exception as e:
-        logger.error(f"Error checking if message is from bot: {e}")
+        print(f"Error checking if message is from bot: {e}")
         return False
 
 
@@ -219,7 +214,7 @@ def generate_response(context: list) -> str:
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-        logger.error(f"Error generating response: {e}")
+        print(f"Error generating response: {e}")
         return f"Error: {str(e)}"
 
 
@@ -240,15 +235,15 @@ def _process_queue(key, client, say, logger):
 
         # Don't log DMs (Slack DM channel IDs start with "D")
         if not channel.startswith("D"):
-            logger.info(f"\n--- Input context ({len(context)} messages) ---")
+            print(f"\n--- Input context ({len(context)} messages) ---")
             for msg in context:
-                logger.info(f"  [{msg['role']}] {msg['content']}")
-            logger.info("---\n")
+                print(f"  [{msg['role']}] {msg['content']}")
+            print("---\n")
 
         response = generate_response(context)
         if response:
             if not channel.startswith("D"):
-                logger.info(f"Response: {response}")
+                print(f"Response: {response}")
             say(response, thread_ts=thread_ts)
         else:
             say("I'm not sure what to say to that!", thread_ts=thread_ts)
@@ -394,10 +389,10 @@ def main():
 
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
-        logger.error("Error: SLACK_APP_TOKEN not set in environment")
+        print("Error: SLACK_APP_TOKEN not set in environment")
         return
 
-    logger.info(f"Starting Bolb (model: {HACKCLUB_AI_MODEL}, context: {CONTEXT_MESSAGES} messages)...")
+    print(f"Starting Bolb (model: {HACKCLUB_AI_MODEL}, context: {CONTEXT_MESSAGES} messages)...")
     handler = SocketModeHandler(app, app_token)
     handler.start()
 
