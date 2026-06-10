@@ -106,6 +106,9 @@ thread_queues: dict = defaultdict(list)
 thread_locks: dict = defaultdict(threading.Lock)
 thread_workers: dict = {}
 
+# Cache for user info to avoid repeated API calls
+user_info_cache: dict = {}
+
 # How many messages back to use as context (change this to whatever you want)
 CONTEXT_MESSAGES = 25
 
@@ -126,15 +129,24 @@ def extract_user_text(message_text: str) -> str:
 
 
 def get_user_info(client, user_id: str) -> dict:
-    """Fetch a user's display name and pronouns from their Slack profile"""
+    """Fetch a user's display name and pronouns from their Slack profile (cached)"""
+    # Check cache first to avoid repeated API calls
+    if user_id in user_info_cache:
+        return user_info_cache[user_id]
+    
     try:
         result = client.users_info(user=user_id)
         profile = result["user"]["profile"]
         name = profile.get("display_name") or profile.get("real_name") or user_id
         pronouns = profile.get("pronouns", "").strip()
-        return {"name": name, "pronouns": pronouns}
+        user_info = {"name": name, "pronouns": pronouns}
     except Exception:
-        return {"name": user_id, "pronouns": ""}
+        # Graceful fallback
+        user_info = {"name": user_id, "pronouns": ""}
+    
+    # Cache the result for future use
+    user_info_cache[user_id] = user_info
+    return user_info
 
 
 def fetch_thread_context(client, channel: str, thread_ts: str) -> list:
